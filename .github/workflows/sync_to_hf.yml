@@ -15,4 +15,4 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://MedRG:$HF_TOKEN@huggingface.co/spaces/ErrakrakiMohamed/youtube-playlist-downloader main
+        run: git push --force https://MedRG:$HF_TOKEN@huggingface.co/spaces/MedRG/youtube-playlist-downloader main
