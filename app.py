@@ -2,6 +2,8 @@ import os
 import re
 import time
 import uuid
+import random
+import threading
 import yt_dlp
 import requests as http_requests
 from urllib.parse import urlparse, parse_qs
@@ -50,6 +52,45 @@ QUALITY_HEIGHT = {
     '360p': 360,
     'audio': 0,
 }
+
+# ── Dynamic Proxy State ──
+WORKING_PROXIES = []
+LAST_PROXY_FETCH_TIME = 0
+PROXY_LOCK = threading.Lock()
+
+def _refresh_proxies_if_needed():
+    """Automatically fetch fresh free proxies every few hours."""
+    global WORKING_PROXIES, LAST_PROXY_FETCH_TIME
+    with PROXY_LOCK:
+        now = time.time()
+        # Refresh every hour or if we have zero proxies
+        if now - LAST_PROXY_FETCH_TIME < 3600 and WORKING_PROXIES:
+            return
+
+        urls = [
+            'https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/proxy.txt',
+            'https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt',
+            'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt'
+        ]
+        
+        new_proxies = []
+        for url in urls:
+            try:
+                resp = http_requests.get(url, timeout=10)
+                if resp.ok:
+                    lines = resp.text.strip().split('\n')
+                    for line in lines:
+                        ip_port = line.strip()
+                        if ip_port and ':' in ip_port and '#' not in ip_port:
+                            new_proxies.append(f'http://{ip_port}')
+            except Exception:
+                pass
+                
+        if new_proxies:
+            # Shuffle and keep a working sample buffer
+            random.shuffle(new_proxies)
+            WORKING_PROXIES = new_proxies[:500]
+            LAST_PROXY_FETCH_TIME = now
 
 
 # ─────────────────────────────────────────────
@@ -344,6 +385,9 @@ def _try_cobalt_api(video_id, quality='best'):
                 headers={
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
+                    'Origin': 'https://cobalt.tools',
+                    'Referer': 'https://cobalt.tools/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
                 },
                 timeout=15,
             )
@@ -423,9 +467,31 @@ def playlist_info():
             'extract_flat': True,
             'skip_download': True,
             'ignoreerrors': True,
+            'retries': 2,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        
+        # Helper to try yt-dlp with optional proxy
+        def _try_ydl(opts):
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        info = None
+        # Try direct IP first
+        info = _try_ydl(ydl_opts)
+        
+        # If it failed (likely blocked), try with proxies
+        if not info or not info.get('entries'):
+            _refresh_proxies_if_needed()
+            # Try up to 3 different random proxies
+            for _ in range(3):
+                if not WORKING_PROXIES:
+                    break
+                proxy = random.choice(WORKING_PROXIES)
+                opts_with_proxy = ydl_opts.copy()
+                opts_with_proxy['proxy'] = proxy
+                info = _try_ydl(opts_with_proxy)
+                if info and info.get('entries'):
+                    break
 
         if info:
             entries = info.get('entries', [])
@@ -529,6 +595,8 @@ def extract_url():
          'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}},
     ]
 
+    _refresh_proxies_if_needed()
+
     for strategy in strategies:
         try:
             ydl_opts = {
@@ -536,14 +604,18 @@ def extract_url():
                 'noplaylist': True, 'socket_timeout': 30, 'retries': 2,
                 **strategy,
             }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=False)
-            if info:
+            
+            # Helper to run extraction and handle caching
+            def _extract_and_cache(opts):
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(video_url, download=False)
+                if not info: return None
+                
                 direct_url = info.get('url')
                 if not direct_url:
                     fmts = info.get('requested_formats', [])
-                    if fmts:
-                        direct_url = fmts[0].get('url')
+                    if fmts: direct_url = fmts[0].get('url')
+                
                 if direct_url:
                     token = str(uuid.uuid4())
                     url_cache[token] = {
@@ -556,8 +628,25 @@ def extract_url():
                     return jsonify({
                         'token': token,
                         'filename': url_cache[token]['filename'],
-                        'filesize': url_cache[token]['filesize'],
+                        'filesize': url_cache[token]['filesize']
+                        # Deliberately NOT returning direct_url here for yt-dlp, because YouTube CDN URLs are IP-bound
+                        # and must be proxied through the server that generated them.
                     })
+                return None
+
+            # Try direct IP first
+            res = _extract_and_cache(ydl_opts)
+            if res: return res
+            
+            # If that failed, try with proxies
+            for _ in range(2):
+                if not WORKING_PROXIES:
+                    break
+                opts_with_proxy = ydl_opts.copy()
+                opts_with_proxy['proxy'] = random.choice(WORKING_PROXIES)
+                res = _extract_and_cache(opts_with_proxy)
+                if res: return res
+                
         except Exception:
             continue
 
