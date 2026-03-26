@@ -254,6 +254,110 @@ def _get_video_stream_piped(video_id, quality='best'):
     return None
 
 
+def _get_video_title(video_id):
+    """Get video title from any working Invidious/Piped instance."""
+    # Try Invidious
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            resp = http_requests.get(
+                f'{instance}/api/v1/videos/{video_id}?fields=title',
+                timeout=8, headers={'Accept': 'application/json'}
+            )
+            if resp.ok:
+                return resp.json().get('title', 'video')
+        except Exception:
+            continue
+    # Try Piped
+    for instance in PIPED_INSTANCES:
+        try:
+            resp = http_requests.get(
+                f'{instance}/streams/{video_id}',
+                timeout=8, headers={'Accept': 'application/json'}
+            )
+            if resp.ok:
+                return resp.json().get('title', 'video')
+        except Exception:
+            continue
+    return 'video'
+
+
+def _try_invidious_direct_download(video_id, quality='best'):
+    """Use Invidious /latest_version endpoint for direct video download.
+    This is different from the API — it actually serves the video file."""
+    # Map quality to YouTube itags (pre-muxed video+audio)
+    itag_priority = {
+        'best':  ['22', '18'],       # 720p, 360p
+        '1080p': ['22', '18'],       # 720p fallback (1080p pre-muxed is rare)
+        '720p':  ['22', '18'],       # 720p, 360p
+        '480p':  ['18'],             # 360p
+        '360p':  ['18'],             # 360p
+        'audio': ['140', '139'],     # m4a audio
+    }
+    itags = itag_priority.get(quality, ['22', '18'])
+    is_audio = quality == 'audio'
+
+    for instance in INVIDIOUS_INSTANCES:
+        for itag in itags:
+            url = f'{instance}/latest_version?id={video_id}&itag={itag}&local=true'
+            try:
+                resp = http_requests.head(url, timeout=10, allow_redirects=True)
+                if resp.status_code in (200, 206, 302, 303):
+                    ext = 'm4a' if is_audio else 'mp4'
+                    return {
+                        'url': url,
+                        'content_type': 'audio/mp4' if is_audio else 'video/mp4',
+                        'ext': ext,
+                    }
+            except Exception:
+                continue
+    return None
+
+
+def _try_cobalt_api(video_id, quality='best'):
+    """Use Cobalt API (cobalt.tools) to get a download URL."""
+    cobalt_quality_map = {
+        'best': '720', '1080p': '1080', '720p': '720',
+        '480p': '480', '360p': '360', 'audio': '128',
+    }
+    vq = cobalt_quality_map.get(quality, '720')
+    is_audio = quality == 'audio'
+
+    cobalt_endpoints = [
+        'https://api.cobalt.tools',
+    ]
+
+    for endpoint in cobalt_endpoints:
+        try:
+            payload = {
+                'url': f'https://www.youtube.com/watch?v={video_id}',
+                'videoQuality': vq,
+            }
+            if is_audio:
+                payload['isAudioOnly'] = True
+
+            resp = http_requests.post(
+                endpoint,
+                json=payload,
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                timeout=15,
+            )
+            if resp.ok:
+                data = resp.json()
+                download_url = data.get('url')
+                if download_url:
+                    ext = 'mp3' if is_audio else 'mp4'
+                    return {
+                        'url': download_url,
+                        'content_type': 'audio/mpeg' if is_audio else 'video/mp4',
+                        'ext': ext,
+                    }
+        except Exception:
+            continue
+    return None
+
 # ─────────────────────────────────────────────
 # ROUTES
 # ─────────────────────────────────────────────
@@ -353,6 +457,7 @@ def extract_url():
     data = request.get_json()
     video_url = data.get('url', '').strip()
     quality = data.get('quality', 'best')
+    given_title = data.get('title', '')  # Frontend may pass the title
 
     if not video_url:
         return jsonify({'error': 'No video URL provided.'}), 400
@@ -361,41 +466,48 @@ def extract_url():
     if not video_id:
         return jsonify({'error': 'Could not extract video ID from URL.'}), 400
 
-    # ── Try Invidious first ──
+    def _cache_and_respond(url, filename, filesize=None, content_type='video/mp4', headers=None):
+        """Helper to cache a download URL and return the JSON response."""
+        token = str(uuid.uuid4())
+        url_cache[token] = {
+            'direct_url': url,
+            'headers': headers or {},
+            'filename': filename,
+            'filesize': filesize,
+            'content_type': content_type,
+            'expires': time.time() + CACHE_TTL,
+        }
+        return jsonify({'token': token, 'filename': filename, 'filesize': filesize})
+
+    # Get video title (use given title or fetch it)
+    title = given_title or _get_video_title(video_id)
+    safe_title = _sanitize_filename(title)
+
+    # ── METHOD 1: Invidious /latest_version (direct download endpoint) ──
+    result = _try_invidious_direct_download(video_id, quality)
+    if result:
+        filename = f'{safe_title}.{result["ext"]}'
+        return _cache_and_respond(result['url'], filename, content_type=result['content_type'])
+
+    # ── METHOD 2: Cobalt API ──
+    result = _try_cobalt_api(video_id, quality)
+    if result:
+        filename = f'{safe_title}.{result["ext"]}'
+        return _cache_and_respond(result['url'], filename, content_type=result['content_type'])
+
+    # ── METHOD 3: Invidious API streams ──
     stream_info = _get_video_stream_invidious(video_id, quality)
     if stream_info and stream_info.get('url'):
-        token = str(uuid.uuid4())
-        url_cache[token] = {
-            'direct_url': stream_info['url'],
-            'headers': {},
-            'filename': stream_info['filename'],
-            'filesize': stream_info.get('filesize'),
-            'content_type': stream_info.get('content_type', 'video/mp4'),
-            'expires': time.time() + CACHE_TTL,
-        }
-        return jsonify({
-            'token': token,
-            'filename': stream_info['filename'],
-            'filesize': stream_info.get('filesize'),
-        })
+        return _cache_and_respond(
+            stream_info['url'], stream_info['filename'],
+            stream_info.get('filesize'), stream_info.get('content_type', 'video/mp4'))
 
-    # ── Try Piped API ──
+    # ── METHOD 4: Piped API streams ──
     stream_info = _get_video_stream_piped(video_id, quality)
     if stream_info and stream_info.get('url'):
-        token = str(uuid.uuid4())
-        url_cache[token] = {
-            'direct_url': stream_info['url'],
-            'headers': {},
-            'filename': stream_info['filename'],
-            'filesize': stream_info.get('filesize'),
-            'content_type': stream_info.get('content_type', 'video/mp4'),
-            'expires': time.time() + CACHE_TTL,
-        }
-        return jsonify({
-            'token': token,
-            'filename': stream_info['filename'],
-            'filesize': stream_info.get('filesize'),
-        })
+        return _cache_and_respond(
+            stream_info['url'], stream_info['filename'],
+            stream_info.get('filesize'), stream_info.get('content_type', 'video/mp4'))
 
     # ── Fallback: try yt-dlp with multiple strategies ──
     chosen_format = FORMAT_MAP.get(quality, FORMAT_MAP['best'])

@@ -327,7 +327,7 @@
             const resp = await fetch('/api/extract-url', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ url: v.url, quality: currentQuality }),
+                body: JSON.stringify({ url: v.url, quality: currentQuality, title: v.title }),
             });
             const data = await resp.json();
             if (!resp.ok || data.error) throw new Error(data.error || 'Extraction failed.');
