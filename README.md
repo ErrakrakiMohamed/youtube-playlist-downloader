@@ -1,3 +1,13 @@
+---
+title: PlaylistGrabber
+emoji: 🚀
+colorFrom: purple
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # PlaylistGrabber 🚀
 
 PlaylistGrabber is a modern, high-speed YouTube playlist downloader built with Flask and Python. It features a premium, responsive UI and uses a "Zero Disk Storage" approach—videos are streamed directly to your browser without taking up any space on the server.
