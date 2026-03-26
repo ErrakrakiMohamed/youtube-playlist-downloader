@@ -477,7 +477,13 @@ def extract_url():
             'content_type': content_type,
             'expires': time.time() + CACHE_TTL,
         }
-        return jsonify({'token': token, 'filename': filename, 'filesize': filesize})
+        # Return BOTH token (for server proxy) AND direct_url (for direct browser download)
+        return jsonify({
+            'token': token,
+            'filename': filename,
+            'filesize': filesize,
+            'direct_url': url,  # Frontend can download directly from this URL
+        })
 
     # Get video title (use given title or fetch it)
     title = given_title or _get_video_title(video_id)

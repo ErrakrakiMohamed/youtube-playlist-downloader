@@ -323,7 +323,7 @@
         badge.classList.remove('hidden');
 
         try {
-            // Step 1 — extract URL (server-side via yt-dlp)
+            // Step 1 — extract URL (server finds working source)
             const resp = await fetch('/api/extract-url', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -332,22 +332,31 @@
             const data = await resp.json();
             if (!resp.ok || data.error) throw new Error(data.error || 'Extraction failed.');
 
-            // Step 2 — trigger browser download via hidden iframe
+            // Step 2 — download directly from source (bypasses our server)
             badge.className = 'badge badge-dl';
             badge.textContent = '⬇ Downloading…';
 
-            const iframe = document.createElement('iframe');
-            iframe.style.display = 'none';
-            iframe.src = `/api/download/${data.token}`;
-            document.body.appendChild(iframe);
+            // Use direct_url to download straight from Invidious/Piped
+            // This avoids our server proxy (which gets blocked by YouTube)
+            const downloadUrl = data.direct_url || `/api/download/${data.token}`;
+            
+            // Create a clickable link to trigger browser download
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = data.filename || 'video.mp4';
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
 
-            // After a few seconds, optimistically show "started"
+            // Show success after a delay
             setTimeout(() => {
                 badge.className = 'badge badge-done';
                 badge.textContent = '✅ Started';
                 btn.disabled = false;
-                iframe.remove();
-            }, 4000);
+            }, 3000);
 
         } catch (err) {
             badge.className = 'badge badge-err';
