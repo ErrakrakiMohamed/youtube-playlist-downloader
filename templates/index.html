@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlaylistGrabber — Download YouTube Playlists</title>
+    <meta name="description" content="Download entire YouTube playlists for free. Choose quality, grab videos instantly.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        /* ── Reset ── */
+        *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+        /* ── Base ── */
+        body{
+            font-family:'Inter',system-ui,sans-serif;
+            background:#0a0a14;
+            color:#e2e8f0;
+            min-height:100vh;
+            overflow-x:hidden;
+        }
+
+        /* ── Animated BG blobs ── */
+        .bg-glow{position:fixed;border-radius:50%;filter:blur(120px);pointer-events:none;z-index:0}
+        .bg-glow.a{width:500px;height:500px;background:rgba(124,58,237,.12);top:-10%;left:10%;animation:drift 18s ease-in-out infinite alternate}
+        .bg-glow.b{width:400px;height:400px;background:rgba(37,99,235,.09);bottom:5%;right:5%;animation:drift 22s ease-in-out infinite alternate-reverse}
+        .bg-glow.c{width:350px;height:350px;background:rgba(6,182,212,.07);top:50%;left:50%;animation:drift 15s ease-in-out infinite alternate}
+        @keyframes drift{0%{transform:translate(0,0)}50%{transform:translate(40px,-30px)}100%{transform:translate(-30px,20px)}}
+
+        /* ── Layout ── */
+        .container{max-width:920px;margin:0 auto;padding:20px;position:relative;z-index:1}
+
+        /* ── Header ── */
+        .header{text-align:center;padding:48px 0 32px}
+        .logo{font-size:2.6rem;font-weight:900;letter-spacing:-.02em;
+            background:linear-gradient(135deg,#a78bfa,#7c3aed,#2563eb,#06b6d4);
+            background-size:300% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+            animation:gradShift 4s ease-in-out infinite alternate}
+        @keyframes gradShift{0%{background-position:0% 50%}100%{background-position:100% 50%}}
+        .tagline{color:#64748b;font-size:1rem;font-weight:300;margin-top:6px}
+
+        /* ── Ad Banner Placeholder ── */
+        .ad-slot{text-align:center;padding:14px;margin:0 0 24px;min-height:90px;border:1px dashed rgba(255,255,255,.06);
+            border-radius:10px;display:flex;align-items:center;justify-content:center;color:#334155;font-size:.75rem;
+            background:rgba(255,255,255,.01)}
+        .ad-slot-id{font-family:monospace;opacity:.5}
+
+        /* ── Glass Card ── */
+        .card{background:rgba(255,255,255,.025);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+            border:1px solid rgba(255,255,255,.07);border-radius:18px;padding:28px;margin-bottom:24px;
+            transition:border-color .35s ease,box-shadow .35s ease}
+        .card:hover{border-color:rgba(124,58,237,.18);box-shadow:0 0 40px rgba(124,58,237,.04)}
+
+        /* ── Input Row ── */
+        .input-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+        .url-input{flex:1;min-width:200px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:14px 18px;color:#e2e8f0;font-size:.95rem;font-family:inherit;outline:none;
+            transition:border-color .3s,box-shadow .3s}
+        .url-input:focus{border-color:#7c3aed;box-shadow:0 0 0 3px rgba(124,58,237,.14)}
+        .url-input::placeholder{color:#475569}
+
+        select.quality{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:12px;
+            padding:14px 16px;color:#e2e8f0;font-size:.9rem;font-family:inherit;cursor:pointer;outline:none;
+            min-width:110px;transition:border-color .3s}
+        select.quality:focus{border-color:#7c3aed}
+        select.quality option{background:#1e1b4b;color:#e2e8f0}
+
+        /* ── Buttons ── */
+        .btn{padding:13px 26px;border:none;border-radius:12px;font-size:.9rem;font-weight:600;font-family:inherit;
+            cursor:pointer;transition:all .25s ease;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+        .btn:disabled{opacity:.45;cursor:not-allowed;transform:none !important;box-shadow:none !important}
+        .btn-primary{background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff}
+        .btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(124,58,237,.35)}
+        .btn-success{background:linear-gradient(135deg,#059669,#10b981);color:#fff}
+        .btn-success:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 28px rgba(16,185,129,.3)}
+        .btn-sm{padding:8px 14px;font-size:.8rem;border-radius:8px}
+        .btn-ghost{background:rgba(124,58,237,.1);color:#a78bfa;border:1px solid rgba(124,58,237,.25)}
+        .btn-ghost:hover:not(:disabled){background:rgba(124,58,237,.2);transform:translateY(-1px)}
+
+        /* ── Spinner ── */
+        .spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.15);border-top-color:#a78bfa;
+            border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle}
+        @keyframes spin{to{transform:rotate(360deg)}}
+
+        /* ── Playlist Section ── */
+        .playlist-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+        .playlist-title{font-size:1.2rem;font-weight:700}
+        .playlist-count{color:#94a3b8;font-size:.85rem;font-weight:400;margin-left:8px}
+
+        /* ── Video Items ── */
+        .video-list{display:flex;flex-direction:column;gap:10px}
+        .video-item{display:flex;align-items:center;gap:14px;padding:10px 14px;
+            background:rgba(255,255,255,.018);border:1px solid rgba(255,255,255,.05);border-radius:14px;
+            transition:all .25s ease}
+        .video-item:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.1)}
+        .video-num{color:#475569;font-size:.8rem;font-weight:600;min-width:24px;text-align:center}
+        .video-thumb{width:110px;height:62px;border-radius:8px;object-fit:cover;flex-shrink:0;
+            background:rgba(255,255,255,.04)}
+        .video-meta{flex:1;min-width:0}
+        .video-meta h3{font-size:.88rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+        .video-meta .dur{color:#64748b;font-size:.75rem}
+        .video-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+
+        /* ── Status Badges ── */
+        .badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:.7rem;font-weight:600}
+        .badge-prep{background:rgba(251,191,36,.1);color:#fbbf24}
+        .badge-dl{background:rgba(96,165,250,.1);color:#60a5fa;animation:pulse 1.4s infinite}
+        .badge-done{background:rgba(52,211,153,.1);color:#34d399}
+        .badge-err{background:rgba(248,113,113,.1);color:#f87171}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+        /* ── Skeleton ── */
+        .skeleton{height:62px;border-radius:14px;
+            background:linear-gradient(90deg,rgba(255,255,255,.02) 25%,rgba(255,255,255,.06) 50%,rgba(255,255,255,.02) 75%);
+            background-size:200% 100%;animation:shimmer 1.4s infinite;margin-bottom:10px}
+        @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+
+        /* ── Toasts ── */
+        .toast-box{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+        .toast{padding:12px 18px;border-radius:10px;font-size:.85rem;font-weight:500;animation:slideIn .3s ease;
+            max-width:360px;pointer-events:auto;cursor:pointer}
+        .toast-err{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:#fca5a5}
+        .toast-ok{background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);color:#6ee7b7}
+        .toast-info{background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.25);color:#93c5fd}
+        @keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+        /* ── Footer ── */
+        .footer{text-align:center;padding:36px 0 28px;color:#334155;font-size:.75rem}
+        .footer a{color:#7c3aed;text-decoration:none}
+
+        /* ── Hidden ── */
+        .hidden{display:none !important}
+
+        /* ── Responsive ── */
+        @media(max-width:640px){
+            .logo{font-size:1.9rem}
+            .input-row{flex-direction:column}
+            select.quality{min-width:auto}
+            .video-thumb{width:72px;height:40px}
+            .video-meta h3{font-size:.8rem}
+            .playlist-head{flex-direction:column;align-items:flex-start}
+        }
+    </style>
+</head>
+<body>
+    <!-- Background Glow -->
+    <div class="bg-glow a"></div>
+    <div class="bg-glow b"></div>
+    <div class="bg-glow c"></div>
+
+    <!-- Toasts -->
+    <div class="toast-box" id="toastBox"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">PlaylistGrabber</div>
+            <p class="tagline">Download YouTube playlists — straight to your device</p>
+        </header>
+
+        <!-- Ad Slot Top -->
+        <div class="ad-slot" id="adSlotTop">
+            <!-- ADSTERRA: Paste your 728x90 banner code here -->
+            <span class="ad-slot-id">Ad Space — Top Banner</span>
+        </div>
+
+        <!-- Input Card -->
+        <div class="card" id="inputCard">
+            <div class="input-row">
+                <input type="url" class="url-input" id="urlInput" placeholder="Paste YouTube playlist URL here…" autocomplete="off">
+                <select class="quality" id="qualitySelect">
+                    <option value="best">Best</option>
+                    <option value="1080p">1080p</option>
+                    <option value="720p" selected>720p</option>
+                    <option value="480p">480p</option>
+                    <option value="360p">360p</option>
+                    <option value="audio">Audio Only</option>
+                </select>
+                <button class="btn btn-primary" id="fetchBtn" onclick="fetchPlaylist()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    Fetch
+                </button>
+            </div>
+            <p style="color:#475569;font-size:.78rem">Supports playlists and single video URLs</p>
+        </div>
+
+        <!-- Loading Skeleton -->
+        <div class="card hidden" id="loadingCard">
+            <div class="skeleton"></div>
+            <div class="skeleton"></div>
+            <div class="skeleton"></div>
+            <div class="skeleton" style="width:60%"></div>
+        </div>
+
+        <!-- Playlist Card -->
+        <div class="card hidden" id="playlistCard">
+            <div class="playlist-head">
+                <div>
+                    <span class="playlist-title" id="plTitle"></span>
+                    <span class="playlist-count" id="plCount"></span>
+                </div>
+                <button class="btn btn-success btn-sm" id="dlAllBtn" onclick="downloadAll()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download All
+                </button>
+            </div>
+            <div class="video-list" id="videoList"></div>
+        </div>
+
+        <!-- Ad Slot Bottom -->
+        <div class="ad-slot" id="adSlotBottom">
+            <!-- ADSTERRA: Paste your native / 728x90 banner code here -->
+            <span class="ad-slot-id">Ad Space — Bottom Banner</span>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            PlaylistGrabber &copy; 2026 &mdash; Videos download directly to your device. Nothing stored on server.
+        </footer>
+    </div>
+
+    <script>
+    // ── State ──
+    let videos = [];
+    let currentQuality = '720p';
+    let isDownloadingAll = false;
+
+    // ── Helpers ──
+    function fmtDuration(s) {
+        if (!s) return '';
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+        return h > 0
+            ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+            : `${m}:${String(sec).padStart(2,'0')}`;
+    }
+
+    function showToast(msg, type = 'info') {
+        const box = document.getElementById('toastBox');
+        const t = document.createElement('div');
+        t.className = `toast toast-${type === 'error' ? 'err' : type === 'success' ? 'ok' : 'info'}`;
+        t.textContent = msg;
+        t.onclick = () => t.remove();
+        box.appendChild(t);
+        setTimeout(() => t.remove(), 5000);
+    }
+
+    function setBtn(id, text, disabled) {
+        const b = document.getElementById(id);
+        if (text) b.innerHTML = text;
+        b.disabled = !!disabled;
+    }
+
+    // ── Fetch Playlist ──
+    async function fetchPlaylist() {
+        const url = document.getElementById('urlInput').value.trim();
+        if (!url) { showToast('Please paste a YouTube URL', 'error'); return; }
+
+        currentQuality = document.getElementById('qualitySelect').value;
+
+        document.getElementById('playlistCard').classList.add('hidden');
+        document.getElementById('loadingCard').classList.remove('hidden');
+        setBtn('fetchBtn', '<span class="spinner"></span> Fetching…', true);
+
+        try {
+            const resp = await fetch('/api/playlist-info', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ url }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) throw new Error(data.error || 'Unknown error');
+
+            videos = data.videos || [];
+            if (videos.length === 0) throw new Error('No videos found in this playlist.');
+
+            document.getElementById('plTitle').textContent = data.title;
+            document.getElementById('plCount').textContent = `${videos.length} video${videos.length !== 1 ? 's' : ''}`;
+
+            const list = document.getElementById('videoList');
+            list.innerHTML = '';
+            videos.forEach((v, i) => {
+                const item = document.createElement('div');
+                item.className = 'video-item';
+                item.id = `vi-${i}`;
+                item.innerHTML = `
+                    <span class="video-num">${i + 1}</span>
+                    <img class="video-thumb" src="${v.thumbnail}" alt="" loading="lazy" onerror="this.style.display='none'">
+                    <div class="video-meta">
+                        <h3 title="${v.title}">${v.title}</h3>
+                        <span class="dur">${fmtDuration(v.duration)}</span>
+                    </div>
+                    <div class="video-actions">
+                        <span class="badge hidden" id="badge-${i}"></span>
+                        <button class="btn btn-ghost btn-sm" id="dlbtn-${i}" onclick="downloadSingle(${i})">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Download
+                        </button>
+                    </div>`;
+                list.appendChild(item);
+            });
+
+            document.getElementById('loadingCard').classList.add('hidden');
+            document.getElementById('playlistCard').classList.remove('hidden');
+            showToast(`Found ${videos.length} videos`, 'success');
+
+        } catch (err) {
+            showToast(err.message, 'error');
+            document.getElementById('loadingCard').classList.add('hidden');
+        } finally {
+            setBtn('fetchBtn', `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Fetch`, false);
+        }
+    }
+
+    // ── Download Single Video ──
+    async function downloadSingle(idx) {
+        const v = videos[idx];
+        const btn = document.getElementById(`dlbtn-${idx}`);
+        const badge = document.getElementById(`badge-${idx}`);
+
+        btn.disabled = true;
+        badge.className = 'badge badge-prep';
+        badge.textContent = '⏳ Preparing…';
+        badge.classList.remove('hidden');
+
+        try {
+            // Step 1 — extract URL (server-side via yt-dlp)
+            const resp = await fetch('/api/extract-url', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ url: v.url, quality: currentQuality }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) throw new Error(data.error || 'Extraction failed.');
+
+            // Step 2 — trigger browser download via hidden iframe
+            badge.className = 'badge badge-dl';
+            badge.textContent = '⬇ Downloading…';
+
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = `/api/download/${data.token}`;
+            document.body.appendChild(iframe);
+
+            // After a few seconds, optimistically show "started"
+            setTimeout(() => {
+                badge.className = 'badge badge-done';
+                badge.textContent = '✅ Started';
+                btn.disabled = false;
+                iframe.remove();
+            }, 4000);
+
+        } catch (err) {
+            badge.className = 'badge badge-err';
+            badge.textContent = '❌ Failed';
+            btn.disabled = false;
+            showToast(`${v.title}: ${err.message}`, 'error');
+            setTimeout(() => badge.classList.add('hidden'), 5000);
+        }
+    }
+
+    // ── Download All ──
+    async function downloadAll() {
+        if (isDownloadingAll) return;
+        isDownloadingAll = true;
+        const dlBtn = document.getElementById('dlAllBtn');
+        dlBtn.disabled = true;
+        dlBtn.innerHTML = '<span class="spinner"></span> Downloading…';
+        showToast('Starting batch download — videos will appear in your browser downloads.', 'info');
+
+        for (let i = 0; i < videos.length; i++) {
+            await downloadSingle(i);
+            // Wait between downloads to avoid overwhelming the server
+            if (i < videos.length - 1) await new Promise(r => setTimeout(r, 3000));
+        }
+
+        dlBtn.innerHTML = '✅ All Done';
+        showToast('All downloads have been triggered!', 'success');
+        isDownloadingAll = false;
+        setTimeout(() => {
+            dlBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download All`;
+            dlBtn.disabled = false;
+        }, 3000);
+    }
+
+    // ── Enter key to fetch ──
+    document.getElementById('urlInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') fetchPlaylist();
+    });
+    </script>
+</body>
+</html>

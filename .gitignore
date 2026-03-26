@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+env/
+.env
+.flaskenv
+
+# Project specific
+downloads/
+*.log
+.DS_Store
+Thumbs.db
+
+# Gemini/IDE artifacts
+.gemini/
+.idea/
+.vscode/
