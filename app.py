@@ -34,7 +34,16 @@ INVIDIOUS_INSTANCES = [
     'https://invidious.privacyredirect.com',
 ]
 
-# ── Quality height mapping for Invidious stream selection ──
+# ── Public Piped API instances (alternative to Invidious) ──
+PIPED_INSTANCES = [
+    'https://pipedapi.kavin.rocks',
+    'https://pipedapi.adminforge.de',
+    'https://pipedapi.in.projectsegfau.lt',
+    'https://api.piped.yt',
+    'https://pipedapi.r4fo.com',
+]
+
+# ── Quality height mapping ──
 QUALITY_HEIGHT = {
     'best': 9999,
     '1080p': 1080,
@@ -136,58 +145,112 @@ def _get_playlist_invidious(playlist_id):
 
 
 def _get_video_stream_invidious(video_id, quality='best'):
-    """Get video stream URL from Invidious API."""
+    """Get video stream URL from Invidious API. Tries ALL instances."""
     target_height = QUALITY_HEIGHT.get(quality, 9999)
     is_audio = quality == 'audio'
 
-    data, instance = _invidious_get(f'/api/v1/videos/{video_id}')
-    if not data:
-        return None
+    # Try every Invidious instance until one returns actual stream URLs
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            resp = http_requests.get(
+                f'{instance}/api/v1/videos/{video_id}',
+                timeout=15,
+                headers={'Accept': 'application/json'}
+            )
+            if not resp.ok:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
 
-    title = data.get('title', 'video')
+        title = data.get('title', 'video')
 
-    if is_audio:
-        # Get the best audio-only adaptive format
-        adaptive = data.get('adaptiveFormats', [])
-        audio_streams = [f for f in adaptive if f.get('type', '').startswith('audio/')]
-        if audio_streams:
-            # Sort by bitrate, pick highest
-            audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-            stream = audio_streams[0]
-            stream_url = stream.get('url', '')
-            ext = 'mp4'  # Usually m4a audio in mp4 container
-            if 'webm' in stream.get('type', ''):
-                ext = 'webm'
-            return {
-                'url': stream_url,
-                'filename': f'{_sanitize_filename(title)}.{ext}',
-                'filesize': stream.get('contentLength'),
-                'content_type': stream.get('type', 'audio/mp4').split(';')[0],
-            }
-    else:
-        # Get pre-muxed format streams (video + audio combined)
-        streams = data.get('formatStreams', [])
-        if streams:
-            # Sort by resolution height (descending)
-            streams.sort(key=lambda x: int(x.get('resolution', '0p').replace('p', '') or 0), reverse=True)
+        if is_audio:
+            adaptive = data.get('adaptiveFormats', [])
+            audio_streams = [f for f in adaptive if f.get('type', '').startswith('audio/') and f.get('url')]
+            if audio_streams:
+                audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                stream = audio_streams[0]
+                return {
+                    'url': stream['url'],
+                    'filename': f'{_sanitize_filename(title)}.m4a',
+                    'filesize': stream.get('contentLength'),
+                    'content_type': stream.get('type', 'audio/mp4').split(';')[0],
+                }
+        else:
+            streams = data.get('formatStreams', [])
+            streams = [s for s in streams if s.get('url')]  # Only streams with URLs
+            if streams:
+                streams.sort(key=lambda x: int(x.get('resolution', '0p').replace('p', '') or 0), reverse=True)
+                best = streams[0]
+                for s in streams:
+                    h = int(s.get('resolution', '0p').replace('p', '') or 0)
+                    if h <= target_height:
+                        best = s
+                        break
+                return {
+                    'url': best['url'],
+                    'filename': f'{_sanitize_filename(title)}.{best.get("container", "mp4")}',
+                    'filesize': best.get('contentLength'),
+                    'content_type': best.get('type', 'video/mp4').split(';')[0],
+                }
+    return None
 
-            # Find the best stream that fits the quality target
-            best = streams[0]  # Default to best
-            for s in streams:
-                h = int(s.get('resolution', '0p').replace('p', '') or 0)
-                if h <= target_height:
-                    best = s
-                    break
 
-            stream_url = best.get('url', '')
-            ext = best.get('container', 'mp4')
-            return {
-                'url': stream_url,
-                'filename': f'{_sanitize_filename(title)}.{ext}',
-                'filesize': best.get('contentLength'),
-                'content_type': best.get('type', 'video/mp4').split(';')[0],
-            }
+def _get_video_stream_piped(video_id, quality='best'):
+    """Get video stream URL from Piped API. Tries ALL instances."""
+    target_height = QUALITY_HEIGHT.get(quality, 9999)
+    is_audio = quality == 'audio'
 
+    for instance in PIPED_INSTANCES:
+        try:
+            resp = http_requests.get(
+                f'{instance}/streams/{video_id}',
+                timeout=15,
+                headers={'Accept': 'application/json'}
+            )
+            if not resp.ok:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+
+        title = data.get('title', 'video')
+
+        if is_audio:
+            audio_streams = data.get('audioStreams', [])
+            audio_streams = [s for s in audio_streams if s.get('url')]
+            if audio_streams:
+                audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                stream = audio_streams[0]
+                ext = 'mp3' if 'mpeg' in stream.get('mimeType', '') else 'm4a'
+                return {
+                    'url': stream['url'],
+                    'filename': f'{_sanitize_filename(title)}.{ext}',
+                    'filesize': stream.get('contentLength'),
+                    'content_type': stream.get('mimeType', 'audio/mp4').split(';')[0],
+                }
+        else:
+            video_streams = data.get('videoStreams', [])
+            # Filter: only streams with both video and audio (not video-only)
+            combined = [s for s in video_streams if s.get('url') and s.get('videoOnly') is False]
+            if not combined:
+                # Fallback: use any video stream with a URL
+                combined = [s for s in video_streams if s.get('url')]
+            if combined:
+                combined.sort(key=lambda x: x.get('height', 0) or 0, reverse=True)
+                best = combined[0]
+                for s in combined:
+                    if (s.get('height', 0) or 0) <= target_height:
+                        best = s
+                        break
+                ext = 'mp4' if 'mp4' in best.get('mimeType', '') else 'webm'
+                return {
+                    'url': best['url'],
+                    'filename': f'{_sanitize_filename(title)}.{ext}',
+                    'filesize': best.get('contentLength'),
+                    'content_type': best.get('mimeType', 'video/mp4').split(';')[0],
+                }
     return None
 
 
@@ -300,6 +363,24 @@ def extract_url():
 
     # ── Try Invidious first ──
     stream_info = _get_video_stream_invidious(video_id, quality)
+    if stream_info and stream_info.get('url'):
+        token = str(uuid.uuid4())
+        url_cache[token] = {
+            'direct_url': stream_info['url'],
+            'headers': {},
+            'filename': stream_info['filename'],
+            'filesize': stream_info.get('filesize'),
+            'content_type': stream_info.get('content_type', 'video/mp4'),
+            'expires': time.time() + CACHE_TTL,
+        }
+        return jsonify({
+            'token': token,
+            'filename': stream_info['filename'],
+            'filesize': stream_info.get('filesize'),
+        })
+
+    # ── Try Piped API ──
+    stream_info = _get_video_stream_piped(video_id, quality)
     if stream_info and stream_info.get('url'):
         token = str(uuid.uuid4())
         url_cache[token] = {
