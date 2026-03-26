@@ -27,7 +27,6 @@ FORMAT_MAP = {
 INVIDIOUS_INSTANCES = [
     'https://inv.nadeko.net',
     'https://invidious.nerdvpn.de',
-    'https://invidious.projectsegfau.lt',
     'https://vid.puffyan.us',
     'https://invidious.lunar.icu',
     'https://iv.datura.network',
@@ -38,7 +37,6 @@ INVIDIOUS_INSTANCES = [
 PIPED_INSTANCES = [
     'https://pipedapi.kavin.rocks',
     'https://pipedapi.adminforge.de',
-    'https://pipedapi.in.projectsegfau.lt',
     'https://api.piped.yt',
     'https://pipedapi.r4fo.com',
 ]
@@ -302,6 +300,11 @@ def _try_invidious_direct_download(video_id, quality='best'):
             try:
                 resp = http_requests.head(url, timeout=10, allow_redirects=True)
                 if resp.status_code in (200, 206, 302, 303):
+                    # Make sure they didn't return an HTML error page saying "shutdown"
+                    content_type = resp.headers.get('Content-Type', '')
+                    if 'text/html' in content_type.lower():
+                        continue
+                        
                     ext = 'm4a' if is_audio else 'mp4'
                     return {
                         'url': url,
