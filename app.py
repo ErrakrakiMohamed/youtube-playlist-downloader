@@ -47,62 +47,97 @@ def index():
 
 @app.route('/api/playlist-info', methods=['POST'])
 def playlist_info():
-    """Fetch playlist metadata without downloading anything."""
+    """Fetch playlist metadata without downloading anything.
+    Uses multiple strategies to bypass YouTube bot detection."""
     data = request.get_json()
     url = data.get('url', '').strip()
 
     if not url:
         return jsonify({'error': 'Please provide a playlist URL.'}), 400
 
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,
-        'skip_download': True,
-        'ignoreerrors': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android', 'web'],
-            }
+    # Multiple user-agent strategies to try (in order)
+    strategies = [
+        {   # Strategy 1: Mobile Safari (iPhone)
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
         },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        {   # Strategy 2: Android Chrome
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        },
+        {   # Strategy 3: Desktop Chrome (fallback)
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            'extractor_args': {'youtube': {'player_client': ['web']}},
+        },
+    ]
+
+    last_error = ''
+
+    for i, strategy in enumerate(strategies):
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'socket_timeout': 30,
+            'retries': 3,
+            'extractor_retries': 3,
+            **strategy,
         }
-    }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
 
-        if info is None:
-            return jsonify({'error': 'Could not extract playlist info. Check the URL.'}), 400
+            if info is not None:
+                entries = info.get('entries', [])
+                videos = []
+                for j, entry in enumerate(entries):
+                    if entry:
+                        vid = entry.get('id', '')
+                        videos.append({
+                            'id': vid,
+                            'title': entry.get('title', f'Video {j + 1}'),
+                            'url': f'https://www.youtube.com/watch?v={vid}' if vid else '',
+                            'duration': entry.get('duration'),
+                            'thumbnail': f'https://i.ytimg.com/vi/{vid}/mqdefault.jpg' if vid else '',
+                        })
 
-        entries = info.get('entries', [])
-        videos = []
-        for i, entry in enumerate(entries):
-            if entry:
-                vid = entry.get('id', '')
-                videos.append({
-                    'id': vid,
-                    'title': entry.get('title', f'Video {i + 1}'),
-                    'url': f'https://www.youtube.com/watch?v={vid}' if vid else '',
-                    'duration': entry.get('duration'),
-                    'thumbnail': f'https://i.ytimg.com/vi/{vid}/mqdefault.jpg' if vid else '',
-                })
+                if videos:
+                    return jsonify({
+                        'title': info.get('title', 'Unknown Playlist'),
+                        'video_count': len(videos),
+                        'videos': videos,
+                    })
 
-        return jsonify({
-            'title': info.get('title', 'Unknown Playlist'),
-            'video_count': len(videos),
-            'videos': videos,
-        })
+            last_error = 'Extraction returned no results.'
+        except Exception as e:
+            last_error = str(e)
+            continue
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # All strategies failed
+    error_msg = last_error
+    if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+        error_msg = ('YouTube is blocking requests from this server. '
+                     'This is a known issue with cloud-hosted servers. '
+                     'The app works best when run locally on your own PC.')
+    return jsonify({'error': error_msg}), 400
 
 
 @app.route('/api/extract-url', methods=['POST'])
 def extract_url():
-    """Extract direct download URL, cache it, and return a one-time token."""
+    """Extract direct download URL, cache it, and return a one-time token.
+    Tries multiple client strategies to bypass bot detection."""
     _cleanup_cache()
 
     data = request.get_json()
@@ -114,62 +149,92 @@ def extract_url():
 
     chosen_format = FORMAT_MAP.get(quality, FORMAT_MAP['best'])
 
-    ydl_opts = {
-        'format': chosen_format,
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android', 'web'],
-            }
+    strategies = [
+        {   # Strategy 1: iOS client
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+            },
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
         },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
-        }
-    }
+        {   # Strategy 2: Android client
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36',
+            },
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        },
+        {   # Strategy 3: Desktop (fallback)
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            },
+            'extractor_args': {'youtube': {'player_client': ['web']}},
+        },
+    ]
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
+    last_error = ''
 
-        if info is None:
-            return jsonify({'error': 'Could not extract video info.'}), 400
-
-        # Get the direct stream URL
-        direct_url = info.get('url')
-        if not direct_url:
-            formats = info.get('requested_formats', [])
-            if formats:
-                direct_url = formats[0].get('url')
-
-        if not direct_url:
-            return jsonify({'error': 'Could not extract a download URL for this video.'}), 400
-
-        title = info.get('title', 'video')
-        ext = info.get('ext', 'mp4')
-        filename = f"{_sanitize_filename(title)}.{ext}"
-        http_headers = info.get('http_headers', {})
-        filesize = info.get('filesize') or info.get('filesize_approx')
-
-        # Store in short-lived cache
-        token = str(uuid.uuid4())
-        url_cache[token] = {
-            'direct_url': direct_url,
-            'headers': http_headers,
-            'filename': filename,
-            'filesize': filesize,
-            'expires': time.time() + CACHE_TTL,
+    for strategy in strategies:
+        ydl_opts = {
+            'format': chosen_format,
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'socket_timeout': 30,
+            'retries': 3,
+            'extractor_retries': 3,
+            **strategy,
         }
 
-        return jsonify({
-            'token': token,
-            'filename': filename,
-            'filesize': filesize,
-        })
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+            if info is None:
+                last_error = 'Could not extract video info.'
+                continue
+
+            # Get the direct stream URL
+            direct_url = info.get('url')
+            if not direct_url:
+                formats = info.get('requested_formats', [])
+                if formats:
+                    direct_url = formats[0].get('url')
+
+            if not direct_url:
+                last_error = 'Could not extract a download URL for this video.'
+                continue
+
+            title = info.get('title', 'video')
+            ext = info.get('ext', 'mp4')
+            filename = f"{_sanitize_filename(title)}.{ext}"
+            http_headers = info.get('http_headers', {})
+            filesize = info.get('filesize') or info.get('filesize_approx')
+
+            # Store in short-lived cache
+            token = str(uuid.uuid4())
+            url_cache[token] = {
+                'direct_url': direct_url,
+                'headers': http_headers,
+                'filename': filename,
+                'filesize': filesize,
+                'expires': time.time() + CACHE_TTL,
+            }
+
+            return jsonify({
+                'token': token,
+                'filename': filename,
+                'filesize': filesize,
+            })
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    # All strategies failed
+    error_msg = last_error
+    if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+        error_msg = ('YouTube is blocking this video from the server. '
+                     'Try a different video, or run the app locally.')
+    return jsonify({'error': error_msg}), 400
 
 
 @app.route('/api/download/<token>')
